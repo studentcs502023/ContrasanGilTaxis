@@ -1,0 +1,32 @@
+# Dependencias gestionadas por pnpm / npm
+node_modules/
+.pnpm-store/
+
+# Archivos de compilación / producción (Vite build)
+dist/
+dist-ssr/
+build/
+*.local
+
+# Variables de entorno del cliente
+.env
+.env.local
+.env.production.local
+.env.development.local
+
+# Registros de error de pnpm y gestores de paquetes
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Caché de compiladores y herramientas de desarrollo
+.cache/
+.vite/
+.eslintcache
+
+# Archivos del sistema operativo y editores de código
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
