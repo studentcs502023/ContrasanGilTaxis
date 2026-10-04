@@ -3,7 +3,10 @@ from datetime import datetime
 from fastapi import HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from routers.viajes import models
+# Importamos la función que se conecta a Traccar
+from routers.traccar.serviceTraccar import obtener_coordenadas_taxista
 
 
 def calcular_precio_oficial_sp(
@@ -40,11 +43,12 @@ def getViajeById(db: Session, viaje_id: int) -> models.ViajeResponse:
             v.id, v.pasajero_id, v.taxista_id, v.barrio_origen, v.direccion_origen,
             ST_Y(v.origen_ubicacion) AS latitud_origen,
             ST_X(v.origen_ubicacion) AS longitud_origen,
-            v.destino_texto, v.estado, v.precio_estimado, v.metodo_pago,
+            v.destino_texto, v.estado, v.precio_estimado, v.metodo_pago, v.radio_busqueda,
             v.creado_en, v.finalizado_en,
             u.nombre AS taxista_nombre,
             u.telefono AS taxista_telefono,
-            t.placa AS taxista_placa
+            t.placa AS taxista_placa,
+            t.traccar_device_id
         FROM solicitudes_viaje v
         LEFT JOIN taxistas t ON v.taxista_id = t.usuario_id
         LEFT JOIN usuarios u ON t.usuario_id = u.id
@@ -66,7 +70,6 @@ def crearSolicitud(db: Session, pasajero_id: int, datos: models.ViajeCreate):
     Crea una solicitud de viaje asegurando que el pasajero no tenga carreras 
     activas simultáneas y calculando la tarifa oficial por Stored Procedure.
     """
-    # 1. Verificar si el pasajero ya tiene un viaje activo pendiente o en curso
     sql_activo = text("""
         SELECT id FROM solicitudes_viaje 
         WHERE pasajero_id = :pasajero_id 
@@ -81,25 +84,25 @@ def crearSolicitud(db: Session, pasajero_id: int, datos: models.ViajeCreate):
             detail="Ya tienes un viaje en curso o pendiente. Finalízalo antes de solicitar otro."
         )
 
-    # 2. Calcular precio oficial desde el SP si no viene definido
     if not datos.precio_estimado or datos.precio_estimado == 0:
         es_periferia = "periferia" in (datos.barrio_origen or "").lower()
         precio_final = calcular_precio_oficial_sp(db, es_periferia=es_periferia)
     else:
         precio_final = datos.precio_estimado
 
-    # 3. Insertar el servicio en MariaDB
+    # CORRECCIÓN 1: Se agregó :radio_busqueda en los VALUES
     sql = text("""
         INSERT INTO solicitudes_viaje 
-        (pasajero_id, barrio_origen, direccion_origen, origen_ubicacion, destino_texto, precio_estimado, metodo_pago)
+        (pasajero_id, barrio_origen, direccion_origen, origen_ubicacion, destino_texto, precio_estimado, metodo_pago, radio_busqueda)
         VALUES 
-        (:pasajero_id, :barrio, :direccion, ST_GeomFromText(:punto), :destino, :precio, :pago)
+        (:pasajero_id, :barrio, :direccion, ST_GeomFromText(:punto), :destino, :precio, :pago, :radio_busqueda)
     """)
     
     punto_wkt = f"POINT({datos.longitud_origen} {datos.latitud_origen})"
     metodo_pago_val = datos.metodo_pago.value if hasattr(datos.metodo_pago, 'value') else datos.metodo_pago
     
     try:
+        # CORRECCIÓN 2: Se agregó la variable radio_busqueda al diccionario de ejecución
         result = db.execute(sql, {
             "pasajero_id": pasajero_id,
             "barrio": datos.barrio_origen,
@@ -107,7 +110,8 @@ def crearSolicitud(db: Session, pasajero_id: int, datos: models.ViajeCreate):
             "punto": punto_wkt,
             "destino": datos.destino_texto,
             "precio": precio_final,
-            "pago": metodo_pago_val
+            "pago": metodo_pago_val,
+            "radio_busqueda": getattr(datos, 'radio_busqueda', 500)
         })
         db.commit()
         
@@ -192,12 +196,12 @@ def getSolicitudesPendientesCercanas(
     radio_metros: int = 5000
 ) -> List[models.ViajeResponse]:
     """
-    Consulta carreras pendientes cercanas a la posición del conductor.
+    Consulta carreras pendientes cercanas a una posición dada (Radio en metros)
+    o solicitudes globales (zonas rurales).
     """
     if not latitud or not longitud or abs(latitud) > 90 or abs(longitud) > 180:
         return []
 
-    # Verificar si el conductor tiene alguna carrera activa en curso
     sql_activo = text("""
         SELECT id FROM solicitudes_viaje 
         WHERE taxista_id = :taxista_id 
@@ -211,49 +215,67 @@ def getSolicitudesPendientesCercanas(
 
     punto_ref = f"POINT({longitud} {latitud})"
 
+    # CORRECCIÓN 3: Se incluyó el condicional (OR radio_busqueda >= 50000)
     sql = text("""
         SELECT 
-            id, pasajero_id, taxista_id, barrio_origen, direccion_origen,
+            id, 
+            pasajero_id, 
+            taxista_id, 
+            barrio_origen, 
+            direccion_origen,
             ST_Y(origen_ubicacion) AS latitud_origen,
             ST_X(origen_ubicacion) AS longitud_origen,
-            destino_texto, estado, precio_estimado, metodo_pago,
-            creado_en, finalizado_en
+            destino_texto, 
+            estado, 
+            precio_estimado, 
+            metodo_pago,
+            radio_busqueda,
+            creado_en, 
+            finalizado_en
         FROM solicitudes_viaje
         WHERE estado = 'SOLICITADO'
-          AND ST_Distance_Sphere(origen_ubicacion, ST_GeomFromText(:punto_ref)) <= :radio
+          AND (
+              ST_Distance_Sphere(origen_ubicacion, ST_GeomFromText(:punto_ref, 4326)) <= :radio
+              OR radio_busqueda >= 50000
+          )
         ORDER BY creado_en DESC
     """)
     
     try:
         rows = db.execute(sql, {"punto_ref": punto_ref, "radio": radio_metros}).mappings().all()
         return [models.ViajeResponse(**row) for row in rows]
-    except Exception:
-        sql_fallback = text("""
-            SELECT 
-                id, pasajero_id, taxista_id, barrio_origen, direccion_origen,
-                ST_Y(origen_ubicacion) AS latitud_origen,
-                ST_X(origen_ubicacion) AS longitud_origen,
-                destino_texto, estado, precio_estimado, metodo_pago,
-                creado_en, finalizado_en
-            FROM solicitudes_viaje
-            WHERE estado = 'SOLICITADO'
-            ORDER BY creado_en DESC
-        """)
-        rows = db.execute(sql_fallback).mappings().all()
-        return [models.ViajeResponse(**row) for row in rows]
+    except SQLAlchemyError as e:
+        print(f"Error en consulta espacial de radar: {e}")
+        return []
 
 
-def obtener_solicitudes_en_radar(db: Session, latitud_taxista: float, longitud_taxista: float, radio_metros: float = 500.0):
+def obtener_solicitudes_en_radar(
+    db: Session, 
+    taxista_usuario_id: int,
+    identificador_traccar: str, 
+    radio_metros: float = 500.0
+) -> List[models.ViajeResponse]:
     """
-    Llama al Stored Procedure sp_obtener_solicitudes_cercanas para filtrar 
-    las solicitudes activas a menos de X metros del taxista.
+    Consulta la posición real del taxista directamente desde Traccar 
+    y busca solicitudes pendientes en el radio especificado.
     """
-    sql = text("CALL sp_obtener_solicitudes_cercanas(:lat, :lon, :radio)")
+    # 1. Obtener la ubicación en tiempo real desde Traccar utilizando el identificador/placa del taxi
+    posicion_gps = obtener_coordenadas_taxista(identificador_traccar)
     
-    result = db.execute(sql, {
-        "lat": latitud_taxista,
-        "lon": longitud_taxista,
-        "radio": radio_metros
-    }).mappings().all()
+    if not posicion_gps:
+        # Si Traccar no responde o no tiene señal, puedes optar por retornar vacío 
+        # o hacer un fallback a la tabla de base de datos.
+        print(f"⚠️ No se encontró señal de Traccar para el dispositivo: {identificador_traccar}")
+        return []
 
-    return result
+    latitud_taxista = posicion_gps["latitud"]
+    longitud_taxista = posicion_gps["longitud"]
+
+    # 2. Reutilizar la lógica existente pasando las coordenadas reales obtenidas de Traccar
+    return getSolicitudesPendientesCercanas(
+        db=db,
+        taxista_usuario_id=taxista_usuario_id,
+        latitud=latitud_taxista,
+        longitud=longitud_taxista,
+        radio_metros=int(radio_metros)
+    )

@@ -1,188 +1,443 @@
-// src/components/PanelTaxista.jsx
+
 import React, { useState, useEffect } from 'react';
-import { Navigation, Flag, MapPin, Radio, Loader2 } from 'lucide-react';
-import { viajesService } from '../api/viajeService'; // Asegúrate de tener la función obtenerSolicitudesRadar agregada en tu servicio
+
+import { cambiarEstadoServicio } from '../api/taxistasService';
+
+import { obtenerPosicionesGps, obtenerPosicionTaxi } from '../api/traccarService';
+
+import { Car, User, MapPin, ShieldCheck, PhoneCall, CheckCircle, Navigation } from 'lucide-react';
+
+
 
 export const PanelTaxista = ({
-  solicitudes: solicitudesProp = [],
+
+  perfilTaxista,
+
+  miUbicacion, // Ubicación actual proveniente del radar/Traccar
+
+  solicitudesCercanas = [],
+
+  servicioActivo = null,      
+
   onAceptarCarrera,
-  carreraActiva,
-  onCambiarEstadoViaje,
-  onUbicacionChange
+
+  onFinalizarCarrera
+
 }) => {
-  const [cargando, setCargando] = useState(false);
-  const [miUbicacion, setMiUbicacion] = useState(null);
-  const [carrerasRadar, setCarrerasRadar] = useState([]);
-  const [cargandoRadar, setCargandoRadar] = useState(false);
 
-  // 1. Obtener la ubicación GPS del taxista en tiempo real
+  const [estadoActual, setEstadoActual] = useState(perfilTaxista?.estado || 'inactivo');
+
+  const [cargandoEstado, setCargandoEstado] = useState(false);
+
+ 
+
+  // Estados para almacenar las posiciones globales que llegan de Traccar
+
+  const [posicionesGpsGlobales, setPosicionesGpsGlobales] = useState([]);
+
+
+
+  // Sincronizar el estado local
+
   useEffect(() => {
-    if ('geolocation' in navigator) {
-      const watchId = navigator.geolocation.watchPosition(
-        (pos) => {
-          const nuevaUbicacion = {
-            latitud: pos.coords.latitude,
-            longitud: pos.coords.longitude
-          };
-          setMiUbicacion(nuevaUbicacion);
 
-          // Notificar la ubicación al mapa padre si es necesario
-          if (onUbicacionChange) {
-            onUbicacionChange(nuevaUbicacion);
-          }
-        },
-        (err) => console.error('Error al obtener GPS del taxista:', err),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-      );
+    if (perfilTaxista?.estado) {
 
-      return () => navigator.geolocation.clearWatch(watchId);
+      setEstadoActual(perfilTaxista.estado.toLowerCase());
+
     }
-  }, [onUbicacionChange]);
 
-  // 2. Polling cada 5 segundos al Stored Procedure (/api/viajes/radar) si no hay carrera activa
-  useEffect(() => {
-    if (carreraActiva || !miUbicacion) return;
+  }, [perfilTaxista]);
 
-    const consultarRadarBackend = async () => {
-      try {
-        setCargandoRadar(true);
-        // Llama al endpoint que ejecuta el Stored Procedure sp_obtener_solicitudes_cercanas
-        const respuesta = await viajesService.obtenerSolicitudesRadar(
-          miUbicacion.latitud,
-          miUbicacion.longitud,
-          500 // Radio de 500 metros
-        );
-        setCarrerasRadar(respuesta || []);
-      } catch (error) {
-        console.error('Error al consultar el radar de carreras:', error);
-      } finally {
-        setCargandoRadar(false);
-      }
-    };
 
-    consultarRadarBackend();
-    const intervalId = setInterval(consultarRadarBackend, 5000);
 
-    return () => clearInterval(intervalId);
-  }, [miUbicacion, carreraActiva]);
+  // Manejar el cambio de estado (DISPONIBLE / INACTIVO)
 
-  // Manejar el cambio de estado de la carrera
-  const handleCambiarEstado = async (nuevoEstado) => {
-    setCargando(true);
+  const handleToggleEstado = async () => {
+
+    const taxistaId = perfilTaxista?.id || perfilTaxista?.usuario_id;
+
+    if (!taxistaId) return;
+
+
+
+    setCargandoEstado(true);
+
+    const estadoParaBackend = estadoActual === 'disponible' ? 'inactivo' : 'disponible';
+
+
+
     try {
-      await onCambiarEstadoViaje(carreraActiva.id, nuevoEstado);
-    } catch (error) {
-      alert('Error al actualizar el estado del servicio.');
+
+      await cambiarEstadoServicio(taxistaId, estadoParaBackend);
+
+      setEstadoActual(estadoParaBackend);
+
+    } catch (err) {
+
+      console.error('Error al cambiar el estado:', err);
+
+      alert('No se pudo cambiar el estado de disponibilidad.');
+
     } finally {
-      setCargando(false);
+
+      setCargandoEstado(false);
+
     }
+
   };
 
-  // Determinar qué lista mostrar (da prioridad a lo que devuelva el radar)
-  const listaCarreras = carrerasRadar.length > 0 ? carrerasRadar : solicitudesProp;
+
+
+  // Efecto para consultar periódicamente las posiciones de Traccar y mostrarlas en el frontend
+
+  useEffect(() => {
+
+    const consultarDatosTraccar = async () => {
+
+      try {
+
+        // 1. Obtener todas las posiciones generales desde el proxy de FastAPI/Traccar
+
+        const posiciones = await obtenerPosicionesGps();
+
+        console.log('📍 Posiciones GPS generales desde Traccar:', posiciones);
+
+        setPosicionesGpsGlobales(posiciones || []);
+
+
+
+        // 2. Opcional: Si el taxista tiene un ID específico, podemos consultar su posición unitaria
+
+        const uniqueId = perfilTaxista?.placa || perfilTaxista?.id;
+
+        if (uniqueId) {
+
+          const posicionTaxiEspecifico = await obtenerPosicionTaxi(uniqueId);
+
+          console.log(`🚗 Posición específica del taxi ${uniqueId}:`, posicionTaxiEspecifico);
+
+        }
+
+      } catch (error) {
+
+        console.error('Error al consultar los servicios de Traccar en el panel:', error);
+
+      }
+
+    };
+
+
+
+    // Consulta inicial al montar
+
+    consultarDatosTraccar();
+
+
+
+    // Intervalo de actualización cada 5 segundos para tiempo real
+
+    const intervalo = setInterval(consultarDatosTraccar, 5000);
+
+
+
+    return () => clearInterval(intervalo);
+
+  }, [perfilTaxista]);
+
+
 
   return (
-    <div className="absolute bottom-4 left-4 right-4 md:left-6 md:w-96 z-10 space-y-3">
-      {carreraActiva ? (
-        /* TARJETA DE CARRERA ACTIVA */
-        <div className="bg-slate-900/95 backdrop-blur-md text-white p-5 rounded-2xl border border-amber-500/30 shadow-2xl space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-            <span className="bg-amber-500/20 text-amber-400 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1">
-              <Navigation className="h-3.5 w-3.5 animate-pulse" />
-              Estado: {carreraActiva.estado}
-            </span>
-            <span className="text-xs text-slate-400 font-mono">#{carreraActiva.id}</span>
-          </div>
 
-          <div className="space-y-2 text-sm">
-            <p><strong className="text-slate-400">Origen:</strong> {carreraActiva.direccion_origen || 'No especificado'}</p>
-            <p><strong className="text-slate-400">Destino:</strong> {carreraActiva.destino_texto}</p>
-            {carreraActiva.precio_estimado && (
-              <p><strong className="text-slate-400">Valor Estimado:</strong> ${carreraActiva.precio_estimado.toLocaleString()}</p>
-            )}
-          </div>
+    <div className="absolute top-4 left-4 right-4 md:left-6 md:w-96 z-10 bg-slate-900/95 backdrop-blur-md border border-slate-800 p-4 rounded-2xl shadow-2xl text-white space-y-4">
 
-          <div className="pt-2 space-y-2">
-            {carreraActiva.estado === 'ACEPTADO' && (
-              <button
-                onClick={() => handleCambiarEstado('EN_CURSO')}
-                disabled={cargando}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg disabled:opacity-50"
-              >
-                {cargando ? <Loader2 className="h-5 w-5 animate-spin" /> : <Navigation className="h-5 w-5" />}
-                Iniciar Recorrido
-              </button>
-            )}
+     
 
-            {(carreraActiva.estado === 'EN_CURSO' || carreraActiva.estado === 'ACEPTADO') && (
-              <button
-                onClick={() => handleCambiarEstado('FINALIZADO')}
-                disabled={cargando}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg disabled:opacity-50"
-              >
-                {cargando ? <Loader2 className="h-5 w-5 animate-spin" /> : <Flag className="h-5 w-5" />}
-                Finalizar Carrera 🏁
-              </button>
-            )}
-          </div>
+      {/* 1. Encabezado y Selector de Estado */}
+
+      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+
+        <div>
+
+          <h3 className="text-sm font-bold text-slate-100 flex items-center gap-1.5">
+
+            <Car className="h-4 w-4 text-amber-400" />
+
+            {perfilTaxista?.conductor_nombre || perfilTaxista?.nombre || 'Conductor'}
+
+          </h3>
+
+          <span className="text-xs text-amber-400 font-mono font-semibold">
+
+            Placa: {perfilTaxista?.placa || '---'}
+
+          </span>
+
         </div>
-      ) : (
-        /* LISTA DE SOLICITUDES DISPONIBLES EN EL RADAR (500m) */
-        <div className="bg-slate-900/95 backdrop-blur-md text-white p-4 rounded-2xl border border-slate-800 shadow-2xl max-h-80 overflow-y-auto space-y-3">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-            <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2">
-              <Radio className="h-4 w-4 text-amber-400 animate-pulse" />
-              Radar 500m ({listaCarreras.length})
-            </h3>
-            {cargandoRadar && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
+
+
+
+        {/* Botón Switch de Estado */}
+
+        <button
+
+          onClick={handleToggleEstado}
+
+          disabled={cargandoEstado || !!servicioActivo}
+
+          className={`px-3 py-1.5 rounded-xl font-bold text-xs border transition-all duration-300 flex items-center gap-2 ${
+
+            estadoActual === 'disponible'
+
+              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/30'
+
+              : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+
+          }`}
+
+        >
+
+          <span className={`w-2 h-2 rounded-full ${estadoActual === 'disponible' ? 'bg-emerald-400 animate-ping' : 'bg-slate-500'}`} />
+
+          {cargandoEstado ? 'Cambiando...' : estadoActual === 'disponible' ? 'EN LÍNEA' : 'DESCONECTADO'}
+
+        </button>
+
+      </div>
+
+
+
+      {/* 2. Visualización del Taxi en Vivo y Monitoreo de Traccar */}
+
+      <div className="flex flex-col items-center justify-center bg-slate-800/40 p-2.5 rounded-xl border border-slate-700/50 space-y-2">
+
+        <div className="text-center">
+
+          <p className="text-[11px] font-semibold text-amber-400 flex items-center justify-center gap-1">
+
+            <ShieldCheck className="h-3.5 w-3.5" /> GPS Activo - Traccar San Gil
+
+          </p>
+
+          {miUbicacion ? (
+
+            <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+
+              Posición Traccar: {miUbicacion.lat.toFixed(4)}, {miUbicacion.lng.toFixed(4)}
+
+            </p>
+
+          ) : (
+
+            <p className="text-[10px] text-amber-500/80 font-mono mt-0.5 animate-pulse">
+
+              Buscando señal GPS en Traccar...
+
+            </p>
+
+          )}
+
+        </div>
+
+
+
+        {/* Consola visual para imprimir las posiciones que llegan de obtenerPosicionesGps */}
+
+        <div className="w-full bg-slate-900/80 p-2 rounded-lg border border-slate-800 text-[10px] text-slate-300 space-y-1">
+
+          <div className="font-bold text-amber-300 flex justify-between items-center">
+
+            <span>📡 Dispositivos en Traccar:</span>
+
+            <span className="bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-mono">
+
+              {posicionesGpsGlobales.length} activos
+
+            </span>
+
           </div>
 
-          {!miUbicacion ? (
-            <p className="text-xs text-slate-400 text-center py-4 flex items-center justify-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
-              Obteniendo señal GPS...
-            </p>
-          ) : listaCarreras.length === 0 ? (
-            <p className="text-xs text-slate-400 text-center py-4">
-              Sin carreras a menos de 500 metros...
-            </p>
-          ) : (
-            listaCarreras.map((sol) => (
-              <div key={sol.id} className="p-3 bg-slate-800/60 rounded-xl border border-slate-700 space-y-2 hover:border-amber-500/40 transition-colors">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-xs font-bold text-amber-400">
-                      {sol.barrio_origen || 'Origen registrado'}
-                    </p>
-                    <p className="text-[11px] text-slate-300 flex items-center gap-1 mt-0.5">
-                      <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
-                      {sol.direccion_origen || sol.destino_texto}
-                    </p>
-                  </div>
-                  {sol.distancia_metros !== undefined && (
-                    <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded-full border border-amber-500/30 shrink-0">
-                      a {Math.round(sol.distancia_metros)}m
-                    </span>
-                  )}
+          {posicionesGpsGlobales.length > 0 ? (
+
+            <div className="max-h-24 overflow-y-auto space-y-1 font-mono pr-1">
+
+              {posicionesGpsGlobales.map((pos, idx) => (
+
+                <div key={idx} className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+
+                  <span className="text-slate-400">ID: {pos.deviceId || pos.id}</span>
+
+                  <span className="text-emerald-400 font-semibold">
+
+                    {pos.latitude?.toFixed(4)}, {pos.longitude?.toFixed(4)}
+
+                  </span>
+
                 </div>
 
-                {sol.precio_estimado && (
-                  <p className="text-xs font-semibold text-emerald-400">
-                    ${sol.precio_estimado.toLocaleString()}
-                  </p>
-                )}
+              ))}
 
-                <button
-                  onClick={() => onAceptarCarrera(sol.id)}
-                  className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg transition-colors cursor-pointer"
-                >
-                  Aceptar Carrera
-                </button>
-              </div>
-            ))
+            </div>
+
+          ) : (
+
+            <p className="text-slate-500 italic text-center py-1">Sin posiciones recibidas de Traccar.</p>
+
           )}
+
         </div>
+
+      </div>
+
+
+
+      {/* 3. VISTA DE SERVICIO EN CURSO */}
+
+      {servicioActivo ? (
+
+        <div className="bg-slate-800/80 border border-emerald-500/40 p-3.5 rounded-xl space-y-3">
+
+          <div className="flex items-center justify-between border-b border-slate-700/60 pb-2">
+
+            <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+
+              <User className="h-4 w-4" /> Cliente Asignado
+
+            </span>
+
+            <span className="text-xs font-mono font-bold text-amber-400">
+
+              ${servicioActivo.precio_estimado || '6,900'} COP
+
+            </span>
+
+          </div>
+
+
+
+          <div className="space-y-1.5 text-xs">
+
+            <p className="text-slate-200 font-medium flex items-start gap-1.5">
+
+              <MapPin className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+
+              <span><strong className="text-slate-400">Origen:</strong> {servicioActivo.direccion_origen || 'Origen indicado'}</span>
+
+            </p>
+
+            <p className="text-slate-200 font-medium flex items-start gap-1.5">
+
+              <Navigation className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+
+              <span><strong className="text-slate-400">Destino:</strong> {servicioActivo.destino_texto || 'A convenir'}</span>
+
+            </p>
+
+          </div>
+
+
+
+          <button
+
+            onClick={() => onFinalizarCarrera && onFinalizarCarrera(servicioActivo.id)}
+
+            className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg"
+
+          >
+
+            <CheckCircle className="h-4 w-4" /> Finalizar Carrera
+
+          </button>
+
+        </div>
+
+      ) : (
+
+        /* 4. VISTA DE RADAR DE BÚSQUEDA Y SOLICITUDES CERCANAS */
+
+        <div className="space-y-3">
+
+          <div className="flex items-center justify-between text-xs text-slate-400">
+
+            <span>Solicitudes en Radar (500m)</span>
+
+            <span className="font-bold text-amber-400">{solicitudesCercanas.length} disponibles</span>
+
+          </div>
+
+
+
+          {estadoActual !== 'disponible' ? (
+
+            <div className="p-3 bg-slate-800/50 rounded-xl text-center text-xs text-slate-400">
+
+              Conéctate a internet ("EN LÍNEA") para empezar a recibir viajes cercanos en el radar.
+
+            </div>
+
+          ) : solicitudesCercanas.length === 0 ? (
+
+            <div className="p-3 bg-slate-800/50 rounded-xl text-center text-xs text-slate-400 animate-pulse">
+
+              Buscando pasajeros a menos de 500 metros...
+
+            </div>
+
+          ) : (
+
+            <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+
+              {solicitudesCercanas.map((solicitud) => (
+
+                <div key={solicitud.id} className="p-3 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-between">
+
+                  <div className="space-y-0.5">
+
+                    <div className="text-xs font-bold text-amber-400 flex items-center gap-1">
+
+                      <User className="h-3.5 w-3.5 text-blue-400" /> {solicitud.direccion_origen}
+
+                    </div>
+
+                    <div className="text-[10px] text-slate-400">
+
+                      A {solicitud.distancia_metros || 150}m de ti • <span className="text-emerald-400 font-semibold">${solicitud.precio_estimado || '6,900'} COP</span>
+
+                    </div>
+
+                  </div>
+
+                  <button
+
+                    onClick={() => onAceptarCarrera(solicitud.id)}
+
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors shrink-0"
+
+                  >
+
+                    Aceptar
+
+                  </button>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          )}
+
+        </div>
+
       )}
+
     </div>
+
   );
+
 };
+
+
+
+export default PanelTaxista; 
+

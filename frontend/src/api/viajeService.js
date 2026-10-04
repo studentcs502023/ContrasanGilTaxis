@@ -1,33 +1,36 @@
 import axiosClient from './axiosClient';
 
 export const viajeService = {
-  // Pasajero solicita un nuevo taxi (POST /api/viajes/solicitar)
+  // Pasajero solicita un nuevo taxi
   solicitarViaje: async (datosViaje) => {
     const response = await axiosClient.post('/viajes/solicitar', datosViaje);
     return response.data;
   },
 
-  // Consultar estado de una carrera activa (GET /api/viajes/{viajeId})
+  // Consultar estado de una carrera activa
   getViajeActivo: async (viajeId) => {
     const response = await axiosClient.get(`/viajes/${viajeId}`);
     return response.data;
   },
 
-  // Taxista consulta carreras pendientes cercanas (GET /api/viajes/pendientes)
-  getPendientes: async (lat, lng, radio = 5000) => {
-    const response = await axiosClient.get('/viajes/pendientes', {
-      params: { latitud: lat, longitud: lng, radio_metros: radio }
-    });
-    return response.data;
-  },
+getPendientes: async (lat, lng, radio = 500) => {
+  const response = await axiosClient.get('/viajes/pendientes', {
+    params: { 
+      latitud: lat, 
+      longitud: lng, 
+      radio_metros: radio 
+    }
+  });
+  return response.data;
+},
 
-  // Taxista acepta la carrera (PATCH /api/viajes/{viajeId}/aceptar)
+  // Taxista acepta la carrera
   aceptarViaje: async (viajeId) => {
     const response = await axiosClient.patch(`/viajes/${viajeId}/aceptar`);
     return response.data;
   },
 
-  // Cambiar estado del viaje: EN_CAMINO, EN_CURSO, FINALIZADO, CANCELADO (PATCH /api/viajes/{viajeId}/estado)
+  // Cambiar estado del viaje: EN_CAMINO, EN_CURSO, FINALIZADO, CANCELADO
   cambiarEstadoViaje: async (viajeId, nuevoEstado) => {
     const response = await axiosClient.patch(`/viajes/${viajeId}/estado`, {
       estado: nuevoEstado,
@@ -42,16 +45,6 @@ export const viajeService = {
     });
     return response.data;
   },
-};
-
-export const viajesService = {
-  // Función para consultar las carreras cercanas dentro del radio de 500m
-  obtenerSolicitudesRadar: async (lat, lon, radio = 500) => {
-    const response = await axiosClient.get('/viajes/radar', {
-      params: { lat, lon, radio }
-    });
-    return response.data;
-  }
 };
 
 export default viajeService;

@@ -12,6 +12,9 @@ from routers.viajes import apiViajes
 from routers.suscripciones_vip import apiSuscripcionesVip
 from routers.direcciones_favoritas import apiDireccionesFavoritas
 from routers.calificaciones import apiCalificaciones
+from routers.traccar.apiGps import router as traccar_router
+from fastapi.middleware.cors import CORSMiddleware
+
 
 app = FastAPI(
     title="API San Gil Taxis - MVP",
@@ -23,18 +26,20 @@ app = FastAPI(
 # Configuración CORS con orígenes explícitos (Requerido para con/sin credenciales)
 # -----------------------------------------------------------------------------
 origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    "http://localhost:5173",  # Puerto por defecto de Vite
+    "http://localhost:5174",
+    "http://localhost:5175",  # Tu puerto actual del Frontend
+    "http://127.0.0.1:5175",
+    "http://localhost:3000",  # React CRA
 ]
 
+# 2. Agregar el Middleware de CORS a la aplicación
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,          # Lista explícita en lugar de '*' o regex amplio
-    allow_credentials=True,         # Requerido cuando conCredentials=true en React
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,       # O usa ["*"] para permitir todos durante desarrollo
+    allow_credentials=True,
+    allow_methods=["*"],         # Permite GET, POST, PATCH, DELETE, OPTIONS
+    allow_headers=["*"],         # Permite Authorization, Content-Type, etc.
 )
 
 # Capturador global para que en caso de error 500 se refleje el origen exacto sin usar '*'
@@ -63,6 +68,8 @@ app.include_router(apiViajes.router)
 app.include_router(apiSuscripcionesVip.router)
 app.include_router(apiDireccionesFavoritas.router)
 app.include_router(apiCalificaciones.router)
+app.include_router(traccar_router)
+
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

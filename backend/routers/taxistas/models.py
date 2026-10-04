@@ -3,54 +3,53 @@ from typing import Optional
 from datetime import datetime
 from enum import Enum
 
-
-# Enumeración del estado del servicio del taxista
-class EstadoServicio(str, Enum):
-    DISPONIBLE = "disponible"
-    OCUPADO = "ocupado"
-    INACTIVO = "inactivo"
-
-
-# Esquema para registrar un nuevo taxi / conductor
+# 1. Enumeración del estado del servicio
+class EstadoServicioEnum(str, Enum):
+    disponible = "disponible"
+    ocupado = "ocupado"
+    inactivo = "inactivo"
+    
+# 2. Esquema para registrar / asociar perfil de taxista a un usuario existente
 class TaxistaCreate(BaseModel):
+    usuario_id: int = Field(..., description="ID del usuario en la tabla usuarios")
     placa: str = Field(..., min_length=6, max_length=10, description="Placa del vehículo")
-    conductor_nombre: str = Field(..., max_length=100, description="Nombre del conductor")
-    telefono: str = Field(..., max_length=20, description="Teléfono de contacto")
+    modelo_vehiculo: Optional[str] = Field("No especificado", max_length=50)
+    numero_licencia: Optional[str] = Field("Pendiente", max_length=50)
     latitud: Optional[float] = Field(6.5512, ge=-90, le=90)
     longitud: Optional[float] = Field(-73.1321, ge=-180, le=180)
 
-
-# Esquema para actualizar la información básica del taxista
+# 3. Esquema para actualizar los datos técnicos del taxista
 class TaxistaUpdate(BaseModel):
-    conductor_nombre: Optional[str] = Field(None, max_length=100)
-    telefono: Optional[str] = Field(None, max_length=20)
+    placa: Optional[str] = Field(None, min_length=6, max_length=10)
+    modelo_vehiculo: Optional[str] = Field(None, max_length=50)
+    numero_licencia: Optional[str] = Field(None, max_length=50)
 
-
-# Esquema para actualizar solo el estado del servicio (disponible, ocupado, inactivo)
+# 4. Esquema para actualizar solo el estado del servicio
 class EstadoServicioUpdate(BaseModel):
-    estado: EstadoServicio
+   estado_servicio: EstadoServicioEnum
 
-
-# Esquema para actualizar la ubicación GPS en tiempo real
+# 5. Esquema para actualizar ubicación GPS
 class UbicacionUpdate(BaseModel):
     latitud: float = Field(..., ge=-90, le=90)
     longitud: float = Field(..., ge=-180, le=180)
 
-
-# Alias por si tu servicio también busca UbicacionTaxistaUpdate
+# Alias para compatibilidad
 UbicacionTaxistaUpdate = UbicacionUpdate
 
-
-# Esquema de respuesta completo
+# 6. Esquema de respuesta completo (Combina datos de 'usuarios' y 'taxistas')
 class TaxistaResponse(BaseModel):
-    id: int
+    usuario_id: int
     placa: str
-    conductor_nombre: str
-    telefono: str
-    estado: EstadoServicio
+    modelo_vehiculo: Optional[str] = None
+    numero_licencia: Optional[str] = None
+    estado_servicio: EstadoServicioEnum
     latitud: float
     longitud: float
-    actualizado_en: datetime
+    actualizado_en: Optional[datetime] = None
+
+    # Datos complementarios provenientes del JOIN con la tabla 'usuarios'
+    nombre: Optional[str] = Field(None, description="Nombre obtenido de la tabla usuarios")
+    telefono: Optional[str] = Field(None, description="Teléfono obtenido de la tabla usuarios")
 
     class Config:
         from_attributes = True

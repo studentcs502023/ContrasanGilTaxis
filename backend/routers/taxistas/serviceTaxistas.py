@@ -1,16 +1,47 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from typing import Optional
 from fastapi import HTTPException
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette import status
 
 from routers.taxistas.models import TaxistaUpdate, EstadoServicioUpdate, UbicacionUpdate
+# Importamos la función de Traccar para consultar la posición en vivo
+from routers.traccar.serviceTraccar import obtener_coordenadas_taxista
 
 
-def getTaxistaById(db: Session, usuario_id: int):
+def sincronizar_ubicacion_traccar(db: Session, usuario_id: int, identificador_traccar: str) -> Optional[dict]:
     """
-    Obtiene el perfil completo del taxista extrayendo coordenadas espacial desde POINT.
+    Consulta la posición actual desde Traccar y actualiza la columna POINT en MariaDB.
     """
+    posicion_gps = obtener_coordenadas_taxista(identificador_traccar)
+    if not posicion_gps:
+        return None  # Si Traccar no responde, no altera el flujo pero avisa
+
+    lat = posicion_gps["latitud"]
+    lon = posicion_gps["longitud"]
+    punto_wkt = f"POINT({lon} {lat})"
+
+    query = text("""
+        UPDATE taxistas 
+        SET ultima_ubicacion = ST_GeomFromText(:punto, 4326),
+            actualizado_en = CURRENT_TIMESTAMP
+        WHERE usuario_id = :usuario_id
+    """)
+    db.execute(query, {"punto": punto_wkt, "usuario_id": usuario_id})
+    db.commit()
+    
+    return {"latitud": lat, "longitud": lon}
+
+
+def getTaxistaById(db: Session, usuario_id: int, identificador_traccar: Optional[str] = None):
+    """
+    Obtiene el perfil completo del taxista. Si se le pasa el identificador de Traccar,
+    sincroniza su posición en vivo antes de devolver la información.
+    """
+    if identificador_traccar:
+        sincronizar_ubicacion_traccar(db, usuario_id, identificador_traccar)
+
     query = text("""
         SELECT 
             u.id AS usuario_id,
@@ -35,6 +66,8 @@ def getTaxistaById(db: Session, usuario_id: int):
                 detail="Taxista no encontrado o inactivo"
             )
         return result
+    except HTTPException:
+        raise
     except SQLAlchemyError as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -46,6 +79,7 @@ def updateTaxista(db: Session, usuario_id: int, datos: TaxistaUpdate):
     """
     Actualiza la información del vehículo y licencia del taxista.
     """
+    # Verificación previa de existencia
     getTaxistaById(db, usuario_id)
 
     update_fields = []
@@ -85,6 +119,8 @@ def updateTaxista(db: Session, usuario_id: int, datos: TaxistaUpdate):
             status_code=status.HTTP_409_CONFLICT,
             detail="La placa especificada ya pertenece a otro vehículo registrado"
         )
+    except HTTPException:
+        raise
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(
@@ -115,6 +151,8 @@ def updateEstadoServicio(db: Session, usuario_id: int, datos: EstadoServicioUpda
         db.execute(query, {"estado": estado_normalizado, "usuario_id": usuario_id})
         db.commit()
         return {"mensaje": f"Estado cambiado a '{estado_normalizado}' exitosamente"}
+    except HTTPException:
+        raise
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(
@@ -125,22 +163,34 @@ def updateEstadoServicio(db: Session, usuario_id: int, datos: EstadoServicioUpda
 
 def updateUbicacionGPS(db: Session, usuario_id: int, ubicacion: UbicacionUpdate):
     """
-    Actualiza la posición GPS en tiempo real del taxista en la columna espacial POINT.
+    Actualiza la posición GPS en tiempo real del taxista en la columna espacial POINT (SRID 4326).
     """
-    getTaxistaById(db, usuario_id)
+    if abs(ubicacion.latitud) > 90 or abs(ubicacion.longitud) > 180:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Coordenadas GPS fuera de rango válido"
+        )
 
     query = text("""
         UPDATE taxistas 
-        SET ultima_ubicacion = ST_GeomFromText(:punto, 4326)
+        SET ultima_ubicacion = ST_GeomFromText(:punto, 4326),
+            actualizado_en = CURRENT_TIMESTAMP
         WHERE usuario_id = :usuario_id
     """)
 
     punto_wkt = f"POINT({ubicacion.longitud} {ubicacion.latitud})"
 
     try:
-        db.execute(query, {"punto": punto_wkt, "usuario_id": usuario_id})
+        result = db.execute(query, {"punto": punto_wkt, "usuario_id": usuario_id})
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Taxista no encontrado para actualizar ubicación"
+            )
         db.commit()
         return {"mensaje": "Ubicación GPS actualizada"}
+    except HTTPException:
+        raise
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(
@@ -151,8 +201,12 @@ def updateUbicacionGPS(db: Session, usuario_id: int, ubicacion: UbicacionUpdate)
 
 def getTaxisCercanos(db: Session, latitud: float, longitud: float, radio_metros: int = 500):
     """
-    Consulta espacial que busca taxis en estado 'disponible' en un radio configurable (por defecto 500 metros).
+    Consulta espacial que busca taxis en estado 'disponible' en un radio configurable.
+    Retorna la distancia redondeada en metros ordenada por cercanía.
     """
+    if abs(latitud) > 90 or abs(longitud) > 180:
+        return []
+
     query = text("""
         SELECT 
             t.usuario_id,
@@ -161,14 +215,15 @@ def getTaxisCercanos(db: Session, latitud: float, longitud: float, radio_metros:
             t.placa,
             ST_Y(t.ultima_ubicacion) AS latitud,
             ST_X(t.ultima_ubicacion) AS longitud,
-            ST_Distance_Sphere(t.ultima_ubicacion, ST_GeomFromText(:punto_cliente, 4326)) AS distancia_m
+            ROUND(ST_Distance_Sphere(t.ultima_ubicacion, ST_GeomFromText(:punto_cliente, 4326)), 2) AS distancia_m
         FROM taxistas t
         INNER JOIN usuarios u ON t.usuario_id = u.id
         WHERE t.estado_servicio = 'disponible'
           AND u.estado_cuenta = 'ACTIVO'
+          AND t.ultima_ubicacion IS NOT NULL
           AND ST_Distance_Sphere(t.ultima_ubicacion, ST_GeomFromText(:punto_cliente, 4326)) <= :radio
         ORDER BY distancia_m ASC
-        LIMIT 10
+        LIMIT 20
     """)
 
     punto_cliente_wkt = f"POINT({longitud} {latitud})"

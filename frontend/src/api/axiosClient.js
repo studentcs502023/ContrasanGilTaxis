@@ -18,7 +18,7 @@ export const setAccessToken = (token) => {
 
 export const getAccessToken = () => inMemoryToken || localStorage.getItem('token');
 
-// Interceptor de solicitudes: adjunta el token en cada llamada
+// Interceptor de solicitudes: adjunta el token Bearer en cada llamada
 axiosClient.interceptors.request.use(
   (config) => {
     const token = inMemoryToken || localStorage.getItem('token');
@@ -30,16 +30,18 @@ axiosClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Interceptor de respuestas: maneja la expiración del token
+// Interceptor de respuestas: maneja la expiración del token JWT
 axiosClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+      // Limpia las credenciales almacenadas
       setAccessToken(null);
       localStorage.removeItem('token');
 
-      if (window.location.pathname !== '/') {
-        window.location.href = '/';
+      // Redirige hacia la pantalla de Login si no está ya ahí
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
       }
     }
     return Promise.reject(error);

@@ -50,13 +50,10 @@ def post_solicitar_viaje(
 def listar_carreras_pendientes(
     latitud: float = Query(..., description="Latitud GPS actual del taxista"),
     longitud: float = Query(..., description="Longitud GPS actual del taxista"),
-    radio_metros: int = Query(5000, description="Radio de búsqueda en metros", gt=0),
+    radio_metros: int = Query(500, description="Radio de búsqueda en metros", gt=0),
     current_user: dict = Depends(permitir_taxista),
     db: Session = Depends(get_db),
 ):
-    """
-    Lista carreras en estado 'SOLICITADO' dentro del radio de alcance del taxista.
-    """
     return serviceViajes.getSolicitudesPendientesCercanas(
         db=db,
         taxista_usuario_id=current_user["id"],
@@ -65,27 +62,25 @@ def listar_carreras_pendientes(
         radio_metros=radio_metros
     )
 
+# routers/viajes/apiViajes.py
 
-@router.get(
-    "/radar",
-    status_code=status.HTTP_200_OK,
-    summary="Obtener solicitudes en un rango de 500 metros (Radar)",
-)
+@router.get("/radar", response_model=List[models.ViajeResponse])
 def get_solicitudes_radar(
-    lat: float = Query(..., description="Latitud actual del taxista"),
-    lon: float = Query(..., description="Longitud actual del taxista"),
+    lat: float = Query(..., description="Latitud GPS del taxista"),
+    lon: float = Query(..., description="Longitud GPS del taxista"),
     radio: float = Query(500.0, description="Radio de cobertura en metros"),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(permitir_taxista),
+    current_user: dict = Depends(serviceAuth.get_current_user) # 👈 Obtiene el taxista logueado
 ):
     """
-    Devuelve la lista de solicitudes PENDIENTE a menos del radio especificado (default 500m)
-    usando el Stored Procedure de MariaDB.
+    Obtiene las solicitudes de viaje activas a X metros del taxista.
     """
+    # Pasar current_user["id"] como el argumento taxista_usuario_id
     return serviceViajes.obtener_solicitudes_en_radar(
-        db=db, 
-        latitud_taxista=lat, 
-        longitud_taxista=lon, 
+        db=db,
+        taxista_usuario_id=current_user["id"],  # 👈 ¡AQUÍ ESTABA EL ARGUMENTO FALTANTE!
+        latitud_taxista=lat,
+        longitud_taxista=lon,
         radio_metros=radio
     )
 

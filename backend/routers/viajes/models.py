@@ -26,6 +26,7 @@ class ViajeCreate(BaseModel):
     destino_texto: Optional[str] = Field(None, max_length=150)
     precio_estimado: Optional[float] = Field(6000.0, ge=0)
     metodo_pago: MetodoPago = MetodoPago.EFECTIVO
+    radio_busqueda: Optional[float] = None
 
 
 # Esquema para actualizar el estado del viaje (Taxista / Cliente)
@@ -46,8 +47,12 @@ class ViajeResponse(BaseModel):
     estado: EstadoViaje
     precio_estimado: Optional[float] = None
     metodo_pago: MetodoPago
-    creado_en: Optional[datetime] = None  # 🟢 CORREGIDO: Permite datetime u opcional
+    radio_busqueda: Optional[float] = None
+    creado_en: Optional[datetime] = None
     finalizado_en: Optional[datetime] = None
+    
+    # Campo dinámico devuelto por el SP de Radar
+    distancia_metros: Optional[float] = None 
     
     # Datos adicionales para el cliente
     taxista_nombre: Optional[str] = None
