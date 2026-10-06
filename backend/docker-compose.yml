@@ -15,13 +15,6 @@ services:
     volumes:
       - mariadb_data:/var/lib/mysql
 
-volumes:
-  mariadb_data:
-
-
-
-version: '3'
-services:
   traccar:
     image: traccar/traccar:latest
     container_name: traccar
@@ -31,4 +24,7 @@ services:
       - "5055:5055"
     volumes:
       - ./logs:/opt/traccar/logs
-      - ./conf/traccar.xml:/opt/traccar/conf/traccar.xml
+
+volumes:
+  mariadb_data:
+
